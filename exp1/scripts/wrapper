@@ -1,0 +1,165 @@
+datasets <- list.files(path = data.folder)
+
+for(f in datasets){
+
+target <- "BAD"
+  
+  df <- readRDS(file.path(data.folder, f))
+  
+  levels(df$BAD)[levels(df$BAD) == "GOOD"] <- "0"
+  levels(df$BAD)[levels(df$BAD) == "BAD"] <- "1"
+  
+  print(paste(f, "rows: ", nrow(df), "features: ", ncol(df)))
+  
+  params <- train_model(df)
+  
+  xgb_learner <- makeLearner(
+    "classif.xgboost",
+    predict.type = "prob",
+    par.vals = list(
+      objective = "binary:logistic",
+      eval_metric = "error",
+      early_stopping_rounds = 100,
+      nrounds = 10000,
+      max_depth = params$max_depth,
+      lambda = params$lambda,
+      alpha = params$alpha,
+      eta = params$eta,
+      subsample = params$subsample,
+      min_child_weight = params$min_child_weight,
+      colsample_bytree = params$colsample_bytree
+    )
+  )
+  
+  smp_size <- floor(0.75 * nrow(df))
+  
+  ## set the seed to make your partition reproducible
+  set.seed(123)
+  
+  train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+  
+  test <- df[-train_ind, ]
+  df <- df[train_ind, ]
+  df <- createDummyFeatures(df, target = target, method = 'reference')
+  
+  #######################################################################
+  
+  #                            EMP
+  
+  #######################################################################
+  
+  parallelStartSocket(2, show.info = FALSE)
+  ans <- list()
+  
+  func <- function(task, model, pred, feats, extra.args){
+    m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+    emp <- m$EMPC
+    return(as.numeric(1-emp))
+  }
+  
+  EMP <- makeMeasure(id = "emp", minimize = TRUE, properties = "classif", 
+                     fun = func)
+  
+  trainTask <- makeClassifTask(data = df, target = target, positive=1)
+  #Cross Validation
+  rdesc <- makeResampleDesc("CV", iters = 5)
+  
+  #------------------------- SFFS -----------------------------------------
+  
+  ctrl <- makeFeatSelControlSequential(method = "sffs", 
+                                       alpha = 0.0001, beta = -0.00001, 
+                                       log.fun = "default",
+                                       maxit = 100000) 
+  
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = EMP)
+  print(sfeats)
+  
+  ans$sffs <- sfeats
+  
+  
+  #------------------------- SFBS -----------------------------------------
+  
+  ctrl <- makeFeatSelControlSequential(method = "sfbs", 
+                                       alpha = 0.0001, beta = -0.00001, 
+                                       log.fun = "default",
+                                       maxit = 100000) 
+    
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = EMP)
+  print(sfeats)
+  
+  ans$sfbs <- sfeats
+  
+   #-------------------------   GA   ---------------------------------------
+   
+  ctrl <- makeFeatSelControlGA(mu = 100, mutation.rate = 0.01, lambda = 100,
+                                       log.fun = "default", crossover.rate = 0.5,
+                                       maxit = 100) 
+  
+ 
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = EMP)
+  
+  ans$ga <- sfeats
+  
+  #######################################################################
+  
+  #                         WEIGHTED AVERAGE
+  
+  #######################################################################
+  
+  comb_s <- function(task, model, pred, feats, extra.args){
+    m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+    emp <- as.numeric(((1-m$EMPC)-mean)/std)                        
+    cutoff <- as.numeric(((m$EMPCfrac)-mean)/std)      
+    nfeat <- as.numeric(pred$task.desc$n.feat[1])                   
+
+    nfeat <- as.numeric((nfeat - mean)/std)                            
+
+    obj <- sum(emp,cutoff,nfeat)
+    return(obj)
+  }
+  
+  COMB_S <- makeMeasure(id = "COMB_S", minimize = TRUE, properties = "classif", 
+                        fun = comb_s)
+  
+  #------------------------- SFFS -----------------------------------------
+  
+  ctrl <- makeFeatSelControlSequential(method = "sffs", 
+                                       alpha = 0.0001, beta = -0.00001, 
+                                       log.fun = "default",
+                                       maxit = 100000) 
+  
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = COMB_S)
+  print(sfeats)
+  
+  ans$sffs_wa <- sfeats
+  
+  
+  #------------------------- SFBS -----------------------------------------
+  
+  ctrl <- makeFeatSelControlSequential(method = "sfbs", 
+                                       alpha = 0.0001, beta = -0.00001, 
+                                       log.fun = "default",
+                                       maxit = 100000) 
+    
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = COMB_S)
+  print(sfeats)
+  
+  ans$sfbs_wa <- sfeats
+  
+   #-------------------------   GA   ---------------------------------------
+   
+  ctrl <- makeFeatSelControlGA(mu = 100, mutation.rate = 0.01, lambda = 100,
+                                       log.fun = "default", crossover.rate = 0.5,
+                                       maxit = 100) 
+  
+ 
+  sfeats = selectFeatures(learner = xgb_learner, task = trainTask, resampling = rdesc,
+                          control = ctrl, show.info = TRUE, measures = COMB_S)
+  
+  ans$ga_wa <- sfeats
+  
