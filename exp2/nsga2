@@ -1,0 +1,418 @@
+###################################
+#                                 #
+#             SETTINGS            #
+#                                 #
+###################################
+
+# clearing the memory
+#rm(list = ls())
+
+# installing pacman
+if (require(pacman) == F) install.packages("pacman")
+library(pacman)
+
+# libraries
+p_load(beepr, tictoc, stargazer, ecr, smoof, caret, mlr, parallel, parallelMap, EMP,
+       LiblineaR, randomForest, kknn, xgboost)
+
+# working directory
+cd <- dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(dirname(cd))
+
+
+# setting inner folders
+code.folder <- "nsga2/codes"
+func.folder <- "nsga2/functions"
+data.folder <- "nsga2/data"
+file.folder <- "nsga2/files"
+resu.folder <- "nsga2/output"
+
+# loading functions
+source(file.path(code.folder, "code_0_helper_functions.R"))
+
+
+
+##################################
+#                                #
+#           PARAMETERS           #
+#                                #
+##################################
+
+####### DATA
+
+# datasets
+
+#data_sets <- c("homecredit")
+data_sets <- c("homecredit")
+#######  MODELING
+
+# algorithm
+algos <- "classif.xgboost"
+
+# error measure
+metrics <- auc
+
+# cores
+cores <- 2
+
+
+####### PARTITIONING
+
+# number of trials
+num_iter <- 1
+
+# partitioning
+out_ratio   <- 0.7
+part_method <- "CV"
+num_folds   <- 2
+part_strat  <- T
+
+# random seed
+seed <- 42
+options(mlr.debug.seed = seed)
+set.seed(seed)
+
+
+###### NSGA-II
+
+# parameters
+num_gen  <- 1   # number of generations
+pop_size <- 2   # population size
+mut_prob <- 0.05  # mutation probability
+initial  <- T     # uniformly distributed initial population
+
+# objectives
+minimize <- T   # min or max optimization
+
+# feedback
+silent <- F   # displaying the iterations
+plots  <- F   # exporting the plots
+
+
+
+###################################
+#                                 #
+#            MODELING             #
+#                                 #
+###################################
+
+####### SETTINGS
+
+# creating the grid
+fs_grid <- expand.grid(data = data_sets, algo = algos, cores = cores, plots = plots,
+                       out_ratio = out_ratio, part_method = part_method,
+                       num_folds = num_folds, part_strat = part_strat, seed = seed,
+                       silent = silent, initial = initial, minimize = minimize,
+                       num_gen = num_gen, pop_size = pop_size, mut_prob = mut_prob)
+
+# convert factors to character
+facs <- colnames(fs_grid)[sapply(fs_grid, is.factor)]
+for (var in facs) {
+  fs_grid[[var]] <- as.character(fs_grid[[var]])
+}
+
+# creating placeholders
+results <- list(trials = list(), params = fs_grid)
+trial <- list()
+
+# load parameter values
+pars <- params
+
+# start the timer
+t.start <- proc.time()
+
+
+####### MASTER LOOP FOR MODELING TRIALS
+for (t in 1:num_iter) {
+
+  #t = 1
+  # display info
+  print(paste0("STARTING TRIAL ", t, "/", num_iter, "..."))
+
+  # start the timer
+  t.iter <- proc.time()
+
+
+  ##### LOOP FOR A SINGLE TRIAL
+  for (i in 1:nrow(fs_grid)) {
+
+    #i = 1
+    ###################################
+    #                                 #
+    #       1. DATA PROCESSING        #
+    #                                 #
+    ###################################
+
+    # display info
+    print(paste0("- Iteration ", i, "/", nrow(fs_grid), ": ", fs_grid$data[i]))
+
+    # data import
+    data <- readRDS(file.path(data.folder,paste0(fs_grid$data[i], ".rds")))
+
+    # target variable
+    target <- "BAD"
+
+    # correct colnames
+    colnames(data) <- make.names(colnames(data))
+
+    # one-hot encoding
+    data <- createDummyFeatures(data, target = target)
+    
+    data[1:10000,]
+
+    # data partitioning
+    set.seed(t)
+    tr_idx <- createDataPartition(data[[target]], p = fs_grid$out_ratio[i], list = F)
+    
+    #tr_idx <- sample(seq_len(nrow(data)), size = 0.3)
+    train  <- data[ tr_idx, ]
+    test   <- data[-tr_idx, ]
+
+    # modeling settings
+    tsk <- makeClassifTask(data = data, target = target, positive = target)
+    rsm <- makeResampleDesc(method = as.character(fs_grid$part_method[i]),
+                            stratify = fs_grid$part_strat[i], iters = fs_grid$num_folds[i])
+    msr <- metrics
+
+    # chromosome length
+    num_bits <- ncol(train) - 1
+
+    # display info
+    print(paste0("-- Data dimensions: ", nrow(train), " cases x ", num_bits, " features"))
+
+
+    ###################################
+    #                                 #
+    #        2. LOAD PARAMETERS       #
+    #                                 #
+    ###################################
+
+
+    # learner settings: XGB
+
+    lrn <- makeLearner(as.character(fs_grid$algo[i]), predict.type = "prob",
+                       nrounds = 2, eta = pars$eta, max_depth = pars$max_depth,
+                       nthread = cores)
+
+
+
+    ###################################
+    #                                 #
+    #          3. OBJECTIVES          #
+    #                                 #
+    ###################################
+
+    ### objective 1: DATA COST
+    ob1 <- function(x) {
+
+      # compute data cost
+      value <- sum(x)
+
+      # save external objects
+      assign("cost", value,    envir = .GlobalEnv)
+      assign("iter", iter + 1, envir = .GlobalEnv)
+
+      # return results
+      return(value)
+    }
+
+    ### objective 2: 1 - AUC ROC
+    ob2 <- function(x) {
+
+      # train the model
+      sts   <- subsetTask(tsk, subset = tr_idx, features = as.logical(x))
+      model <- resample(lrn, sts, rsm, msr, show.info = F)
+
+      # evaluate performance
+      value <- 1 - model$aggr["auc.test.mean"]
+
+      # display info
+      if (fs_grid$silent[i] == F) {
+        print(paste0("i = ", iter, "/", fs_grid$pop_size[i]*(fs_grid$num_gen[i] + 1),
+                     ": Features = ", sum(x),
+                     ", Cost = ", round(cost, 0),
+                     ", AUC = ",  round(1 - value, 4)))
+      }
+
+      # return results
+      return(value)
+    }
+
+    ### setup multi-objective function
+    obj_fun <- makeMultiObjectiveFunction(name = "Custom multi-objective function",
+                                          fn = function(x) c(ob1(x), ob2(x)),
+                                          n.objectives = 2L, minimize = rep(fs_grid$minimize[i], 2),
+                                          par.set = makeNumericParamSet("x", len = num_bits))
+
+
+    ###################################
+    #                                 #
+    #      4. FEATURE SELECTION       #
+    #                                 #
+    ###################################
+
+    ##### CROSS-VALIDATION
+
+    # disply info
+    print("-- Performing feature selection...")
+
+    # enable parallelization
+    if (fs_grid$cores[i] > 1) {
+      p_load(parallel, parallelMap)
+      parallelStartSocket(cpus = fs_grid$cores[i], show.info = F)
+    }
+
+    # reset iteration number
+    iter <- 0
+
+    # initialize population
+    if (fs_grid$initial[i] == T) {
+      pop_probs = seq(0, 1, length.out = min(num_bits, fs_grid$pop_size))
+      population <- list()
+      for (p in pop_probs) {
+        population[[which(pop_probs == p)]] <- rbinom(n = num_bits, size = 1, prob = p)
+      }
+    }else{
+      population <- NULL
+    }
+
+    # binary NSGA-II
+    res <- Nsga2bin(fitness.fun = obj_fun, num_bits = num_bits, num_gen = fs_grid$num_gen[i],
+                    pop_size = fs_grid$pop_size[i], off_size = fs_grid$pop_size[i],
+                    mut_prob = fs_grid$mut_prob[i], silent = fs_grid$silent[i],
+                    initial.solutions = population, minimize = rep(fs_grid$minimize[i], 2))
+
+
+    ##### HOLDOUT
+
+    # extract chromosomes
+    chromo <- t(sapply(res$model$pareto.set, function(x) x))
+    rownames(chromo) <- paste0(1:nrow(chromo), ")")
+    res$chromo <- chromo
+
+    # sample index
+    tr_idx <- tr_idx
+    ts_idx <- (1:nrow(data))[!((1:nrow(data)) %in% tr_idx)]
+
+    # validation loop
+    for (j in 1:nrow(chromo)) {
+
+      # information
+      if (j == 1) {
+        print(paste0("-- Validating Pareto Front (", nrow(chromo), " solutions)..."))
+      }
+
+      # updating the task (only selected features)
+      ts2 <- subsetTask(tsk, features = as.logical(chromo[j, ]))
+
+      # train and predict
+      model <- train(learner = lrn, task = ts2, subset = tr_idx)
+      preds <- predict(model,       task = ts2, subset = ts_idx)
+
+      # correct preds for empty model
+      if (sum(chromo[j,]) == 0) {
+        preds$data$prob.GOOD <- rep(0.5, nrow(preds$data))
+        preds$data$prob.BAD  <- rep(0.5, nrow(preds$data))
+      }
+
+      # save performance
+      if (j == 1) {
+        res$perf <- mlr::performance(preds, measures = metrics)
+      }else{
+        res$perf <- rbind(res$perf, mlr::performance(preds, measures = metrics))
+      }
+    }
+
+    # sample size and partitioning
+    res$data_dim <- dim(data)
+    res$tr_idx   <- tr_idx
+
+    # display info
+    res$time$mtime <- round((res$time$toc - res$time$tic)/60)
+    print(paste0("-- Finished feature selection in ", res$time$mtime, " minutes"))
+
+    # save results
+    trial[[i]] <- res
+
+    # stop parallelization
+    if (fs_grid$cores[i] > 1) {parallelStop()}
+
+
+    ###################################
+    #                                 #
+    #         5. PLOT RESULTS         #
+    #                                 #
+    ###################################
+
+    ##### CROSS-VALIDATION
+
+    # normalize values
+    res$model$pareto.front[, 2] <- 1 - res$model$pareto.front[, 2]
+
+    # save Pareto front
+    pareto.set <- as.matrix(res$model$pareto.front)
+    pareto.set <- pareto.set[order(pareto.set[, 1], decreasing = T), ]
+    pareto.set <- pareto.set[!duplicated(pareto.set), ]
+    colnames(pareto.set) <- c("Cost", "AUC")
+    rownames(pareto.set) <- paste0(1:nrow(pareto.set), ")")
+
+    # plot Pareto front
+    par(mfrow = c(1, 1))
+    PlotParetoFront(pareto.set, minimize = c(T, F),
+                    main = paste0("Frontier: Data = ", fs_grid$data[i], " (Internal CV)"),
+                    objectives = c("Objective I: Number of Features", "Objective II: AUC ROC"))
+
+    # export pareto front
+    if (plots == T) {
+      dev.copy(pdf, file.path(resu.folder, paste0("pfront_t", t, "_", fs_grid$data[i], "_",
+                                                  fs_grid$num_gen[i], "_", fs_grid$pop_size[i],
+                                                  "_cv_auc_cost.pdf")), width = 8, height = 6)
+      dev.off()
+    }
+
+
+    ##### HOLDOUT
+
+    # transfer cv values
+    res$model$pareto.front[, 2] <- res$perf
+
+    # extract nondominated solutions
+    res$model$pareto.front[, 2] <- 1 - res$model$pareto.front[, 2]
+    res$model$pareto.front <- res$model$pareto.front[nondominated(t(res$model$pareto.front)), ]
+    res$model$pareto.front <- matrix(as.matrix(res$model$pareto.front), ncol = 2)
+    res$model$pareto.front[, 2] <- 1 - res$model$pareto.front[, 2]
+
+    # save Pareto front
+    pareto.set <- as.matrix(res$model$pareto.front)
+    pareto.set <- matrix(pareto.set[order(pareto.set[, 1], decreasing = T), ], ncol = 2)
+    pareto.set <- matrix(pareto.set[!duplicated(pareto.set), ], ncol = 2)
+    colnames(pareto.set) <- c("Cost", "AUC")
+    rownames(pareto.set) <- paste0(1:nrow(pareto.set), ")")
+
+    # plot Pareto front
+    par(mfrow = c(1, 1))
+    PlotParetoFront(pareto.set, minimize = c(T, F),
+                    main = paste0("Frontier: Data = ", fs_grid$data[i], " (Validation)"),
+                    objectives = c("Objective I: Number of Features", "Objective II: AUC ROC"))
+
+    # export pareto front
+    if (plots == T) {
+      dev.copy(pdf, file.path(resu.folder, paste0("pfront_t", t, "_", fs_grid$data[i], "_",
+                                                  fs_grid$num_gen[i], "_", fs_grid$pop_size[i],
+                                                  "_val_auc_cost.pdf")), width = 8, height = 6)
+      dev.off()
+    }
+  }
+
+
+  ##### SAVE CHECKPOINT
+
+  # save results
+  results$trials[[t]] <- trial
+  saveRDS(results, file = file.path(file.folder, paste0("res_nsga2_auc_cost_xg.rds")))
+
+  # display the time
+  t.all <- round((((proc.time() - t.start)/60)[3]), digits = 2)
+  t.itr <- round((((proc.time() - t.iter)/60)[3]),  digits = 2)
+  print(paste0("-- Time for iteration: ", t.itr, " min"))
+}
