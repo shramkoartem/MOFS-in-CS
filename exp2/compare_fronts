@@ -1,0 +1,231 @@
+library(ggplot2)
+library(plotly)
+library(rPref)
+
+
+nsga2 <- res$model$pareto.front
+nsga3 <- result$pf_raw$objective_values
+nsga3_10 <- result$pf_raw$objective_values
+
+ccc <- rbind(nsga3, nsga3_10)
+
+
+nsga3 <- nsga3[,c(2,1,3)]
+nsga2 <- nsga2[,c(2,3,1)]
+colnames(nsga2) <- colnames(nsga3)
+
+nsga3$emp <- 1-nsga3$emp
+nsga2$emp <- 1-nsga2$emp
+
+nsga3$mshare <- 1-nsga3$mshare
+nsga2$mshare <- 1-nsga2$mshare
+
+nsga3$alg <- "III"
+nsga3_10$alg <- "10"
+
+
+
+nsga2$alg <- "II"
+
+comb <- rbind(nsga3,nsga2)
+
+
+comb$emp <- 1-comb$emp
+comb$mshare <- 1-comb$mshare
+
+
+pareto <- high(mshare)*high(emp)*low(nf)
+
+p3 <- non_dom_sort(comb,pareto)
+
+nnn <- non_dom_sort(ccc,pareto)
+
+
+p2 <- non_dom_sort(comb,high(mshare)*high(emp))
+
+#p3$alg <- as.factor(p3$alg)
+
+plt <- plot_ly(p3, x=~mshare, y=~emp, z=~nf, color = ~alg, 
+               colors = c('#BF382A', '#0C4B8E'),
+               type="scatter3d", mode = 'markers') %>%
+      #add_markers() %>%
+      layout(scene = list(xaxis = list(title = 'Share'),
+                      yaxis = list(title = 'EMP'),
+                      zaxis = list(title = 'Cost')))
+plt
+
+
+
+
+
+EMPvMS <- ggplot(p2, aes(x=emp, y=mshare, color=alg, size=nf))+
+  geom_point(shape="circle") + 
+  theme_classic() +
+  labs(x="EMP", y="Share")+
+  guides(color=guide_legend(title="Algorithm"))+
+  guides(size=guide_legend(title="Cost"))+
+  theme(legend.position="none")
+  #scale_colour_gradient(colors="Blues")
+#scale_color_manual(values = c('#BF382A', '#0C4B8E'))
+EMPvMS
+
+
+
+p3$alg <- as.factor(p3$alg)
+#p3[which(p3$alg=="III"),"alg"] <- "NSGA III"
+#p3[which(p3$alg=="II"),"alg"] <- "NSGA II"
+
+
+#  %-Dominance
+nrow(p3[which(p3$alg=="III" & p3$.level==1),])/nrow(p3[which(p3$alg=="III"),])
+nrow(p3[which(p3$alg=="II" & p3$.level==1),])/nrow(p3[which(p3$alg=="II"),])
+
+
+#  %-Dominance
+nrow(p2[which(p2$alg=="III" & p2$.level==1),])/nrow(p2[which(p2$alg=="III"),])
+nrow(p2[which(p2$alg=="II" & p2$.level==1),])/nrow(p2[which(p2$alg=="II"),])
+
+
+mean()
+
+
+#EMP
+mean(p3[which(p3$alg=="III"), "emp"])
+sqrt(var(p3[which(p3$alg=="III"), "emp"]))
+
+mean(p3[which(p3$alg=="II"), "emp"])
+sqrt(var(p3[which(p3$alg=="II"), "emp"]))
+
+#Market Share
+mean(p3[which(p3$alg=="III"), "mshare"])
+sqrt(var(p3[which(p3$alg=="III"), "mshare"]))
+
+mean(p3[which(p3$alg=="II"), "mshare"])
+sqrt(var(p3[which(p3$alg=="II"), "mshare"]))
+
+#Costs
+mean(p3[which(p3$alg=="III"), "nf"])
+sqrt(var(p3[which(p3$alg=="III"), "nf"]))
+
+mean(p3[which(p3$alg=="II"), "nf"])
+sqrt(var(p3[which(p3$alg=="II"), "nf"]))
+
+#max EMP
+p3[which(p3$emp==min(p3$emp)), ]
+
+shape = 
+
+EMPvMS <- ggplot(p3, aes(x=emp, y=mshare, color=as.factor(alg), size=nf))+
+          geom_point(shape="circle") + 
+          theme_classic() +
+          labs(x="EMP", y="Share")+
+          guides(color=guide_legend(title="Algorithm"))+
+          guides(size=guide_legend(title="Cost"))+
+          scale_color_manual(values = c('#BF382A', '#0C4B8E'))
+EMPvMS
+
+EMPvC <- ggplot(p3, aes(x=nf, y=mshare, color=as.factor(alg)))+
+  geom_point(shape="circle") + 
+  theme_classic() +
+  labs(x="Cost", y="EMP")+
+  guides(color=guide_legend(title="Algorithm"))+
+  guides(size=guide_legend(title="Cost"))+
+  scale_color_manual(values = c('#BF382A', '#0C4B8E'))
+EMPvC
+
+
+
+alpha=as.factor(.level))
+
+
+h3 <- hypervolume(p3[which(p3$alg=="III"),c(1,2,3)], method = "gaussian")
+h2 <- hypervolume(p3[which(p3$alg=="III"),c(1,2,3)], method = "gaussian")
+
+h3 <- expectation_box(p3[which(p3$alg=="III"),c(1,2,3)])
+h2 <- expectation_box(p3[which(p3$alg=="II"),c(1,2,3)])
+
+
+p3$nf <- p3$nf/12
+
+ppp <- p3
+
+ppp$emp <- ppp$emp*10 
+
+h3 <- hypervolume(ppp[which(ppp$alg=="III"),c(1,2,3)], method = "gaussian")
+h2 <- hypervolume(ppp[which(ppp$alg=="III"),c(1,2,3)], method = "gaussian")
+
+
+
+
+
+
+
+
+###############################################################
+#Spread
+spread <- function(df){
+  sprd <- c()
+  for(i in 1:nrow(df)){
+    d <- 100000
+    for(j in 1:nrow(df)){
+      if(i!=j){
+        d1 <- dist(rbind(df[i,],df[j,]))
+        if(d1 < d){
+          d <- d1
+        }
+      }
+    }
+    sprd <- c(sprd,d)
+  }
+  s <- sum(sprd)/nrow(df)
+  return(s)
+}
+
+spread_s <- function(df){
+  sprd <- c()
+  for(i in 1:nrow(df)){
+    d <- 100000
+    for(j in 1:nrow(df)){
+      if(i!=j){
+        d1 <- dist(rbind(df[i,],df[j,]))
+        if(d1 < d){
+          d <- d1
+        }
+      }
+    }
+    sprd <- c(sprd,d)
+  }
+  s <- sum(sprd)/nrow(df)
+  v <- var(sprd)
+  
+  ans <- s/sqrt(v)
+  
+  return(ans)
+}
+
+############################################################
+spread(comb[,c(1,2,3)])
+
+n2 <- nsga2
+
+n2$emp = n2$emp*100
+n2$mshare = 1-n2$mshare
+
+spread(n2[,c(1,2,3)])
+
+n3 <- nsga3
+
+n3$emp = n3$emp*100
+n3$mshare = 1-n3$mshare
+
+spread(nsga3[,c(1,2,3)])
+spread(nsga2[,c(1,2,3)])
+
+spread_s(nsga3[,c(1,2,3)])
+spread_s(nsga2[,c(1,2,3)])
+
+plot(p3$mshare,p3$cost)
+
+
+
+1-mean(nsga2[which(nsga2$y1<3),"y2"])
