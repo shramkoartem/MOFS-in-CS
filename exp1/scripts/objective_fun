@@ -1,0 +1,56 @@
+
+emp <- function(pred){
+  m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+  emp <- m$EMPC
+  return(as.numeric(1-emp))
+}
+
+mshare <- function(pred){
+  m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+  emp <- m$EMPC
+  cutoff <- m$EMPCfrac
+  
+  share <- 1 - cutoff
+  #print(paste("EMPCS: ", emp, "cutoff: ", cutoff, "share: ", share))
+  
+  inv_share <- 1-share
+  return(as.numeric(inv_share))
+}
+
+######################################################################
+
+# combined unscaled objective #
+
+comb <- function(task, model, pred, feats, extra.args){
+  m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+  emp <- as.numeric(1-m$EMPC)
+  cutoff <- as.numeric(m$EMPCfrac)
+  nfeat <- as.numeric(pred$task.desc$n.feat[1])
+  
+  nfeat <- as.numeric((nfeat / 35))
+  
+  obj <- sum(emp,cutoff,nfeat)
+  return(obj)
+}
+
+COMB <- makeMeasure(id = "COMB", minimize = TRUE, properties = "classif", 
+                     fun = comb)
+
+#######################################################################
+
+# combined unscaled objective #
+
+comb_s <- function(task, model, pred, feats, extra.args){
+  m <- EMP::empCreditScoring(pred$data$prob.1, pred$data$truth)
+  emp <- as.numeric(((1-m$EMPC)-mean)/std)   #insert mean and std
+  cutoff <- as.numeric((m$EMPCfrac)-mean)/std)   #insert mean and std
+  nfeat <- as.numeric(pred$task.desc$n.feat[1])
+  
+  nfeat <- as.numeric((nfeat / 35))
+  
+  obj <- sum(emp,cutoff,nfeat)
+  return(obj)
+}
+
+COMB_S <- makeMeasure(id = "COMB_S", minimize = TRUE, properties = "classif", 
+                    fun = comb_s)
