@@ -1,0 +1,20 @@
+target <- "BAD"
+model <- xgb_learner
+
+# f <- data 
+
+df <- readRDS(file.path(data.folder, f))
+
+levels(df$BAD)[levels(df$BAD) == "GOOD"] <- "0"
+levels(df$BAD)[levels(df$BAD) == "BAD"] <- "1"
+
+task <- makeClassifTask(data = df, target = "BAD", positive=1)
+
+methods = c("information.gain", "chi.squared") 
+fv <- generateFilterValuesData(task, method = methods)
+
+
+fv$data[fv$data$information.gain>mean(fv$data$information.gain),1]  # Info Gain
+fv$data[fv$data$chi.squared>mean(fv$data$chi.squared),1]            # Chi2
+
+flt <- fv$data[fv$data$information.gain>mean(fv$data$information.gain),1]
